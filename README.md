@@ -28,6 +28,38 @@ Optional environment:
 Runtime vault files are written under `DATA_DIR`; the default `data/` directory
 is ignored by git.
 
+## Usability Direction
+
+The sync server should feel like a small personal appliance: simple to start,
+easy to inspect, safe to back up, and replaceable when the user moves machines.
+It should not require cluster operations, external databases, or a managed
+platform to be useful.
+
+Current conclusion:
+
+- The server is an optional sync helper for a local-first vault.
+- It should make self-hosting feel approachable on a personal machine, NAS, or
+  small VPS.
+- It should stay opaque to secrets and never become the source of plaintext
+  truth.
+- Its first usability wins should be setup guidance, diagnostics, backup,
+  migration, and client health-check clarity.
+
+Near-term usability goals:
+
+- Provide a clear first-run path: choose `DATA_DIR`, start the server, see the
+  listen URL, check `/healthz`, connect the client, and confirm first sync.
+- Add copyable setup examples for local machine, LAN machine, NAS, and small VPS
+  usage without changing the server architecture.
+- Make diagnostics actionable: data directory path, writability, vault file
+  count, configured limits, request timeouts, rate-limit state, and recent
+  persistence errors.
+- Make backup and migration obvious: stop server, copy `DATA_DIR`, start server
+  with the same `DATA_DIR`, then verify health from a client.
+- Keep secrets opaque: diagnostics can explain storage and runtime state, but
+  must not print vault payload contents, pairing bundles, or client secrets.
+- Prefer simple scripts and `.env` examples before adding heavier packaging.
+
 ## Source Layout
 
 - `index.js`: process entrypoint and compatibility exports for tests/tools.

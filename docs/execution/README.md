@@ -33,3 +33,11 @@ Every feature development, security improvement, or runtime hardening pass shoul
 add one new Markdown file here before the work is considered complete. General
 README files should link to these records instead of duplicating full execution
 details.
+
+## Records
+
+| Date | Record | Scope |
+|---|---|---|
+| 2026-04-28 | [2026-04-28-server-runtime-hardening.md](2026-04-28-server-runtime-hardening.md) | Runtime hardening |
+| 2026-04-28 | [2026-04-28-server-system-module-refactor.md](2026-04-28-server-system-module-refactor.md) | System module refactor |
+| 2026-04-28 | [2026-04-28-sync-server-usability-direction.md](2026-04-28-sync-server-usability-direction.md) | Sync server usability direction |
