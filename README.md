@@ -14,11 +14,36 @@ npm start
 Optional environment:
 
 - `PORT`: listen port, default `8080`
+- `DATA_DIR`: runtime vault directory, default `./data`
+- `MAX_VAULT_FILE_BYTES`: max stored JSON vault file size, default `134217728`
 - `RATE_LIMIT_MAX`: requests per client per window, default `600`; set `0` to
   disable
 - `RATE_LIMIT_WINDOW_MS`: rate-limit window in milliseconds, default `60000`
+- `REQUEST_TIMEOUT_MS`: max request lifetime, default `30000`
+- `HEADERS_TIMEOUT_MS`: max time to receive request headers, default `10000`
+- `KEEP_ALIVE_TIMEOUT_MS`: idle keep-alive timeout, default `5000`
+- `SHUTDOWN_TIMEOUT_MS`: graceful shutdown force timeout, default `5000`
+- `CORS_ORIGIN`: optional comma-separated browser origin allowlist
 
-Runtime vault files are written under `data/`, which is ignored by git.
+Runtime vault files are written under `DATA_DIR`; the default `data/` directory
+is ignored by git.
+
+## Source Layout
+
+- `index.js`: process entrypoint and compatibility exports for tests/tools.
+- `system/config.js`: environment-backed runtime constants.
+- `system/app.js`: Express app assembly and route registration.
+- `system/server.js`: HTTP server startup, timeouts, and shutdown handling.
+- `system/routes/`: route modules grouped by API domain; larger domains use
+  subfolders with one endpoint flow per file.
+- `system/vault/`: vault directory checks, paths, document normalization, file
+  limits, atomic writes, recovery, and temp-file cleanup.
+- `system/sync/`: since-version parsing, push validation, conflict
+  classification, and optimistic concurrency state transitions.
+- `system/pairing/`: pairing TTL, codes, session store, authorization checks,
+  and timestamp formatting.
+- `system/http/`: request IDs, security headers, CORS, rate limiting, body
+  validation, logging, and error responses.
 
 ## API
 
@@ -47,6 +72,7 @@ Runtime vault files are written under `data/`, which is ignored by git.
 - Push batch size: `200` items
 - Per-item encrypted payload size: `1mb`
 - Stored vault item count: `10000`
+- Stored JSON vault file size: `128mb`
 - Wrapped pairing bundle size: `64kb`
 - Pairing TTL: clamped between `60s` and `30m`, default `10m`
 - Active pairing sessions: `500`
@@ -55,7 +81,10 @@ Runtime vault files are written under `data/`, which is ignored by git.
 ## Hardening Notes
 
 - Vault ids, item ids, and device ids accept only `[A-Za-z0-9_-]`.
-- Vault writes are atomic and use a `.bak` file for recovery.
+- The runtime data directory is created on startup and verified as writable.
+- Vault writes are atomic, fsynced, and use a `.bak` file for recovery.
+- Stale `vault_*.json.<pid>.tmp` files are cleaned during startup.
+- Oversized vault files are rejected before parsing to avoid memory spikes.
 - Stored vault documents are normalized on load; malformed documents surface as
   `503` persistence errors instead of partial reads.
 - Pairing codes use the readable alphabet
@@ -69,8 +98,16 @@ Runtime vault files are written under `data/`, which is ignored by git.
 - A simple in-memory rate limiter protects a single weak server from accidental
   request floods. Set `maxRequestsPerWindow <= 0` in `createApp(...)` tests to
   disable it.
+- Browser CORS can be restricted with `CORS_ORIGIN`; when unset, the development
+  default remains permissive.
+- The Node HTTP server sets bounded request, header, keep-alive, and shutdown
+  timeouts for slow or half-open connections.
 - `SIGINT` and `SIGTERM` trigger graceful server shutdown with a short force
   timeout.
+
+Detailed feature execution records live in
+[`docs/execution/`](docs/execution/). Add one Markdown file there for every
+feature, security improvement, or runtime hardening pass.
 
 ## Tests
 
@@ -78,6 +115,6 @@ Runtime vault files are written under `data/`, which is ignored by git.
 npm test
 ```
 
-The test suite covers vault persistence recovery, conflict classification,
-request validation, pairing lifecycle, malformed body handling, and security
-headers.
+The test suite covers vault persistence recovery, size limits, stale temp
+cleanup, conflict classification, request validation, pairing lifecycle,
+malformed body handling, HTTP timeouts, and security headers.

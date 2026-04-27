@@ -1,12 +1,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 
 const {
   buildNextVaultState,
   buildConflictResponse,
+  cleanupStaleVaultTempFiles,
+  configureServerTimeouts,
   createApp,
   createEmptyVault,
   getVaultPath,
@@ -119,6 +122,108 @@ test('loadVault rejects malformed stored item documents', () => {
   );
 
   assert.throws(() => loadVault(dataDir, vaultId), /Vault file is unreadable/);
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+test('loadVault rejects oversized vault files before parsing', () => {
+  const dataDir = createTempDir();
+  const vaultId = 'vault_123';
+  const vaultPath = getVaultPath(dataDir, vaultId);
+  fs.writeFileSync(
+    vaultPath,
+    JSON.stringify({
+      currentVersion: 1,
+      items: {},
+    }),
+    'utf8',
+  );
+
+  assert.throws(
+    () => loadVault(dataDir, vaultId, { maxVaultFileBytes: 8 }),
+    /Vault file is unreadable/,
+  );
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+test('saveVault rejects documents over the configured vault file limit', () => {
+  const dataDir = createTempDir();
+  const vaultId = 'vault_123';
+  const vault = createEmptyVault();
+  vault.currentVersion = 1;
+  vault.items.item_1 = {
+    id: 'item_1',
+    version: 1,
+    encrypted_signed_payload: 'x'.repeat(256),
+    is_deleted: false,
+  };
+
+  assert.throws(
+    () => saveVault(dataDir, vaultId, vault, { maxVaultFileBytes: 64 }),
+    /Vault file too large/,
+  );
+  assert.equal(fs.existsSync(getVaultPath(dataDir, vaultId)), false);
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+test('cleanupStaleVaultTempFiles removes old temp files only', () => {
+  const dataDir = createTempDir();
+  const stalePath = path.join(dataDir, 'vault_vault_123.json.111.tmp');
+  const freshPath = path.join(dataDir, 'vault_vault_456.json.222.tmp');
+  const ignoredPath = path.join(dataDir, 'random.tmp');
+  fs.writeFileSync(stalePath, 'stale', 'utf8');
+  fs.writeFileSync(freshPath, 'fresh', 'utf8');
+  fs.writeFileSync(ignoredPath, 'ignored', 'utf8');
+
+  const nowMs = Date.parse('2026-04-28T00:00:00.000Z');
+  fs.utimesSync(stalePath, new Date(nowMs - 5000), new Date(nowMs - 5000));
+  fs.utimesSync(freshPath, new Date(nowMs - 250), new Date(nowMs - 250));
+
+  const removedCount = cleanupStaleVaultTempFiles(dataDir, {
+    nowMs,
+    maxAgeMs: 1000,
+  });
+
+  assert.equal(removedCount, 1);
+  assert.equal(fs.existsSync(stalePath), false);
+  assert.equal(fs.existsSync(freshPath), true);
+  assert.equal(fs.existsSync(ignoredPath), true);
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+test('configureServerTimeouts applies bounded HTTP timeout values', () => {
+  const server = http.createServer();
+
+  const applied = configureServerTimeouts(server, {
+    requestTimeoutMs: 3000,
+    headersTimeoutMs: 9000,
+    keepAliveTimeoutMs: 2000,
+  });
+
+  assert.deepEqual(applied, {
+    requestTimeoutMs: 3000,
+    headersTimeoutMs: 3000,
+    keepAliveTimeoutMs: 2000,
+  });
+  assert.equal(server.requestTimeout, 3000);
+  assert.equal(server.headersTimeout, 3000);
+  assert.equal(server.keepAliveTimeout, 2000);
+  assert.equal(server.maxHeadersCount, 100);
+  server.close();
+});
+
+test('createApp refuses data paths that are not directories', () => {
+  const dataDir = createTempDir();
+  const filePath = path.join(dataDir, 'not-a-directory');
+  fs.writeFileSync(filePath, 'file', 'utf8');
+
+  assert.throws(
+    () =>
+      createApp({
+        dataDir: filePath,
+        logger: { info() {}, warn() {}, log() {}, error() {} },
+      }),
+    /Data path is not a directory/,
+  );
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -406,6 +511,43 @@ test('createApp rejects non-json and malformed json request bodies', async () =>
     assert.deepEqual(await malformedResponse.json(), {
       error: 'Invalid JSON body',
     });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('createApp returns 413 when a sync push exceeds the vault file limit', async () => {
+  const dataDir = createTempDir();
+  const app = createApp({
+    dataDir,
+    logger: { info() {}, warn() {}, log() {}, error() {} },
+    maxVaultFileBytes: 128,
+  });
+  const server = app.listen(0);
+
+  try {
+    const address = server.address();
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/vaults/vault_123/sync`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pushes: [
+            {
+              id: 'item_1',
+              expected_base_version: 0,
+              encrypted_signed_payload: 'x'.repeat(128),
+            },
+          ],
+        }),
+      },
+    );
+
+    assert.equal(response.status, 413);
+    assert.match((await response.json()).error, /Vault file too large/);
+    assert.equal(fs.existsSync(getVaultPath(dataDir, 'vault_123')), false);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(dataDir, { recursive: true, force: true });
