@@ -1,7 +1,7 @@
 {
   "name": "sync_server",
   "version": "1.0.0",
-  "description": "",
+  "description": "Lightweight SecretRoy sync and pairing server",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",

@@ -4,18 +4,39 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const DEFAULT_PORT = Number.parseInt(process.env.PORT || '8080', 10);
+const DEFAULT_PORT = parseIntegerOption(process.env.PORT, 8080, {
+  min: 1,
+  max: 65535,
+});
 const MAX_BODY_SIZE = '5mb';
 const MAX_PUSH_BATCH = 200;
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
+const MAX_VAULT_ITEMS = 10000;
 const SAFE_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const PAIRING_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const PAIRING_CODE_PATTERN = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/;
 const DEFAULT_PAIRING_TTL_SECONDS = 10 * 60;
 const MIN_PAIRING_TTL_SECONDS = 60;
 const MAX_PAIRING_TTL_SECONDS = 30 * 60;
 const MAX_WRAPPED_BUNDLE_BYTES = 64 * 1024;
+const MAX_PAIRING_SESSIONS = 500;
+const DEFAULT_RATE_LIMIT_WINDOW_MS = parseIntegerOption(
+  process.env.RATE_LIMIT_WINDOW_MS,
+  60 * 1000,
+  { min: 1000, max: 60 * 60 * 1000 },
+);
+const DEFAULT_MAX_REQUESTS_PER_WINDOW = parseIntegerOption(
+  process.env.RATE_LIMIT_MAX,
+  600,
+  { min: 0, max: 100000 },
+);
 
-class RequestValidationError extends Error {}
+class RequestValidationError extends Error {
+  constructor(message, statusCode = 400) {
+    super(message);
+    this.statusCode = statusCode;
+  }
+}
 
 class VaultPersistenceError extends Error {}
 
@@ -28,6 +49,23 @@ class PairingSessionError extends Error {
 
 function createEmptyVault() {
   return { currentVersion: 0, items: {} };
+}
+
+function parseIntegerOption(rawValue, fallback, { min, max } = {}) {
+  if (rawValue == null || rawValue === '') {
+    return fallback;
+  }
+  const parsed = Number.parseInt(String(rawValue), 10);
+  if (!Number.isInteger(parsed)) {
+    return fallback;
+  }
+  if (Number.isInteger(min) && parsed < min) {
+    return fallback;
+  }
+  if (Number.isInteger(max) && parsed > max) {
+    return fallback;
+  }
+  return parsed;
 }
 
 function ensureDataDir(dataDir) {
@@ -60,12 +98,47 @@ function normalizeVault(data) {
     Number.isInteger(data.currentVersion) && data.currentVersion >= 0
       ? data.currentVersion
       : 0;
-  const items =
+  const rawItems =
     data.items && typeof data.items === 'object' && !Array.isArray(data.items)
       ? data.items
       : {};
+  const entries = Object.entries(rawItems);
+  if (entries.length > MAX_VAULT_ITEMS) {
+    throw new Error(`Vault item limit exceeded: ${MAX_VAULT_ITEMS}`);
+  }
+  const items = {};
+  for (const [itemId, item] of entries) {
+    items[itemId] = normalizeVaultItem(itemId, item);
+  }
 
   return { currentVersion, items };
+}
+
+function normalizeVaultItem(itemId, item) {
+  validateSafeId(itemId, 'stored item id');
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    throw new Error(`Invalid stored item: ${itemId}`);
+  }
+  const id = typeof item.id === 'string' && item.id.length > 0 ? item.id : itemId;
+  validateSafeId(id, 'stored item id');
+  if (id !== itemId) {
+    throw new Error(`Stored item id mismatch: ${itemId}`);
+  }
+  if (!Number.isInteger(item.version) || item.version < 0) {
+    throw new Error(`Invalid stored item version: ${itemId}`);
+  }
+  if (
+    typeof item.encrypted_signed_payload !== 'string' ||
+    Buffer.byteLength(item.encrypted_signed_payload, 'utf8') > MAX_PAYLOAD_BYTES
+  ) {
+    throw new Error(`Invalid stored item payload: ${itemId}`);
+  }
+  return {
+    id,
+    version: item.version,
+    encrypted_signed_payload: item.encrypted_signed_payload,
+    is_deleted: item.is_deleted === true,
+  };
 }
 
 function readVaultDocument(filePath) {
@@ -241,6 +314,66 @@ function logMessage(logger, level, message) {
   }
 }
 
+function resolveRequestId(rawRequestId) {
+  if (
+    typeof rawRequestId === 'string' &&
+    rawRequestId.length > 0 &&
+    rawRequestId.length <= 80 &&
+    /^[a-zA-Z0-9_.:-]+$/.test(rawRequestId)
+  ) {
+    return rawRequestId;
+  }
+  return `req_${randomHex(12)}`;
+}
+
+function createRateLimitMiddleware({
+  now,
+  windowMs = DEFAULT_RATE_LIMIT_WINDOW_MS,
+  maxRequests = DEFAULT_MAX_REQUESTS_PER_WINDOW,
+} = {}) {
+  const clients = new Map();
+
+  return (req, res, next) => {
+    if (!Number.isFinite(maxRequests) || maxRequests <= 0) {
+      return next();
+    }
+
+    const currentMs = now().getTime();
+    if (clients.size > 1000) {
+      for (const [key, entry] of clients.entries()) {
+        if (entry.resetAtMs <= currentMs) {
+          clients.delete(key);
+        }
+      }
+    }
+
+    const clientKey = req.ip || req.socket?.remoteAddress || 'unknown';
+    let entry = clients.get(clientKey);
+    if (!entry || entry.resetAtMs <= currentMs) {
+      entry = {
+        count: 0,
+        resetAtMs: currentMs + windowMs,
+      };
+      clients.set(clientKey, entry);
+    }
+
+    entry.count += 1;
+    const remaining = Math.max(0, maxRequests - entry.count);
+    res.setHeader('RateLimit-Limit', String(maxRequests));
+    res.setHeader('RateLimit-Remaining', String(remaining));
+    res.setHeader(
+      'RateLimit-Reset',
+      String(Math.ceil(entry.resetAtMs / 1000)),
+    );
+
+    if (entry.count > maxRequests) {
+      return res.status(429).json({ error: 'Too many requests' });
+    }
+
+    return next();
+  };
+}
+
 function buildNextVaultState(vault, pushes) {
   const nextVault = {
     currentVersion: vault.currentVersion,
@@ -301,11 +434,28 @@ function randomHex(length) {
 
 function generatePairingCode() {
   let code = '';
+  const unbiasedLimit =
+    Math.floor(256 / PAIRING_CODE_ALPHABET.length) * PAIRING_CODE_ALPHABET.length;
   while (code.length < 8) {
-    const randomValue = crypto.randomBytes(1)[0] % PAIRING_CODE_ALPHABET.length;
+    let randomValue = crypto.randomBytes(1)[0];
+    while (randomValue >= unbiasedLimit) {
+      randomValue = crypto.randomBytes(1)[0];
+    }
+    randomValue %= PAIRING_CODE_ALPHABET.length;
     code += PAIRING_CODE_ALPHABET[randomValue];
   }
   return code;
+}
+
+function normalizePairingCode(rawPairingCode) {
+  if (typeof rawPairingCode !== 'string' || rawPairingCode.trim().length === 0) {
+    throw new RequestValidationError('Pairing code is required.');
+  }
+  const pairingCode = rawPairingCode.replace(/\s+/g, '').toUpperCase();
+  if (!PAIRING_CODE_PATTERN.test(pairingCode)) {
+    throw new RequestValidationError('Invalid pairing code format.');
+  }
+  return pairingCode;
 }
 
 function sweepExpiredPairingSessions(store, nowMs = Date.now()) {
@@ -314,6 +464,15 @@ function sweepExpiredPairingSessions(store, nowMs = Date.now()) {
       store.sessionsById.delete(sessionId);
       store.sessionsByCode.delete(session.pairingCode);
     }
+  }
+}
+
+function assertPairingCapacity(store) {
+  if (store.sessionsById.size >= MAX_PAIRING_SESSIONS) {
+    throw new PairingSessionError(
+      503,
+      'Pairing session capacity reached. Retry shortly.',
+    );
   }
 }
 
@@ -353,7 +512,7 @@ function toIsoTimestamp(timestampMs) {
 
 function sendRouteError(res, error) {
   if (error instanceof RequestValidationError) {
-    return res.status(400).json({ error: error.message });
+    return res.status(error.statusCode).json({ error: error.message });
   }
   if (error instanceof VaultPersistenceError) {
     return res.status(503).json({ error: error.message });
@@ -368,19 +527,51 @@ function createApp({
   dataDir = path.join(__dirname, 'data'),
   logger = console,
   now = () => new Date(),
+  rateLimitWindowMs = DEFAULT_RATE_LIMIT_WINDOW_MS,
+  maxRequestsPerWindow = DEFAULT_MAX_REQUESTS_PER_WINDOW,
 } = {}) {
   ensureDataDir(dataDir);
   const pairingStore = createPairingStore();
 
   const app = express();
+  app.disable('x-powered-by');
+  app.use((req, res, next) => {
+    req.requestId = resolveRequestId(req.get('x-request-id'));
+    res.setHeader('X-Request-Id', req.requestId);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    next();
+  });
   app.use(cors());
+  app.use(
+    createRateLimitMiddleware({
+      now,
+      windowMs: rateLimitWindowMs,
+      maxRequests: maxRequestsPerWindow,
+    }),
+  );
+  app.use((req, res, next) => {
+    if (
+      ['POST', 'PUT', 'PATCH'].includes(req.method) &&
+      req.headers['content-length'] !== '0' &&
+      !req.is('application/json')
+    ) {
+      return sendRouteError(
+        res,
+        new RequestValidationError('Content-Type must be application/json', 415),
+      );
+    }
+    return next();
+  });
   app.use(express.json({ limit: MAX_BODY_SIZE }));
 
   app.use((req, res, next) => {
     logMessage(
       logger,
       'info',
-      `[${now().toISOString()}] ${req.method} ${req.url}`,
+      `[${now().toISOString()}] [${req.requestId}] ${req.method} ${req.url}`,
     );
     next();
   });
@@ -392,6 +583,7 @@ function createApp({
   app.post('/pairing/sessions', (req, res) => {
     try {
       sweepExpiredPairingSessions(pairingStore, now().getTime());
+      assertPairingCapacity(pairingStore);
 
       const vaultId = req.body?.vault_id;
       const hostDeviceId = req.body?.host_device_id;
@@ -446,14 +638,10 @@ function createApp({
     try {
       sweepExpiredPairingSessions(pairingStore, now().getTime());
 
-      const rawPairingCode = req.body?.pairing_code;
       const requesterDeviceId = req.body?.requester_device_id;
-      if (typeof rawPairingCode !== 'string' || rawPairingCode.trim().length === 0) {
-        throw new RequestValidationError('Pairing code is required.');
-      }
       validateSafeId(requesterDeviceId, 'requester device id');
 
-      const pairingCode = rawPairingCode.trim().toUpperCase();
+      const pairingCode = normalizePairingCode(req.body?.pairing_code);
       const sessionId = pairingStore.sessionsByCode.get(pairingCode);
       if (!sessionId) {
         throw new PairingSessionError(404, 'Pairing code not found.');
@@ -691,10 +879,18 @@ function createApp({
   });
 
   app.use((error, req, res, next) => {
+    if (error?.type === 'entity.too.large') {
+      return res.status(413).json({ error: 'JSON body too large' });
+    }
     if (error instanceof SyntaxError && 'body' in error) {
       return res.status(400).json({ error: 'Invalid JSON body' });
     }
-    return next(error);
+    logMessage(logger, 'error', `[Internal Error] ${error?.stack || error}`);
+    return res.status(500).json({ error: 'Internal server error' });
+  });
+
+  app.use((req, res) => {
+    res.status(404).json({ error: 'Route not found' });
   });
 
   return app;
@@ -702,13 +898,30 @@ function createApp({
 
 function startServer({ port = DEFAULT_PORT, dataDir } = {}) {
   const app = createApp({ dataDir });
-  return app.listen(port, () => {
+  const server = app.listen(port, () => {
     console.log('--------------------------------------------------');
     console.log('    SecretRoy Distributed Vault Server (Dumb)     ');
     console.log(`    Running on http://localhost:${port}           `);
     console.log('    E2EE Enabled | JSON Document Store Mode       ');
     console.log('--------------------------------------------------');
   });
+
+  const shutdown = (signal) => {
+    console.log(`[${signal}] Closing SecretRoy sync server...`);
+    server.close(() => {
+      console.log('SecretRoy sync server closed.');
+      process.exit(0);
+    });
+    setTimeout(() => {
+      console.error('Forced shutdown after timeout.');
+      process.exit(1);
+    }, 5000).unref();
+  };
+
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+
+  return server;
 }
 
 if (require.main === module) {
@@ -719,8 +932,11 @@ module.exports = {
   buildNextVaultState,
   createApp,
   createEmptyVault,
+  createRateLimitMiddleware,
   getVaultPath,
   loadVault,
+  normalizePairingCode,
+  parseIntegerOption,
   parseSinceVersion,
   saveVault,
   startServer,
