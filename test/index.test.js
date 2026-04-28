@@ -569,7 +569,7 @@ test('pairing session lifecycle creates, joins, approves, and fetches bundle', a
     const hostDeviceId = 'device_abcdef123456';
     const requesterDeviceId = 'device_123456abcdef';
     const requesterPublicKey = 'q'.repeat(43);
-    const encryptedBundle = `sroy-pairing-v2:${'b'.repeat(64)}`;
+    const encryptedBundle = `sroy-pairing:${'b'.repeat(64)}`;
 
     const createResponse = await fetch(`${baseUrl}/pairing/sessions`, {
       method: 'POST',
@@ -636,6 +636,11 @@ test('pairing session lifecycle creates, joins, approves, and fetches bundle', a
     const bundleBody = await bundleResponse.json();
     assert.equal(bundleBody.status, 'approved');
     assert.equal(bundleBody.wrapped_vault_bundle, encryptedBundle);
+
+    const secondBundleResponse = await fetch(
+      `${baseUrl}/pairing/sessions/${createdSession.session_id}/bundle?request_id=${joinBody.request_id}&requester_device_id=${requesterDeviceId}`,
+    );
+    assert.equal(secondBundleResponse.status, 404);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(dataDir, { recursive: true, force: true });
@@ -685,7 +690,7 @@ test('pairing approve rejects plaintext transfer codes', async () => {
         body: JSON.stringify({
           host_device_id: hostDeviceId,
           request_id: joinBody.request_id,
-          wrapped_vault_bundle: 'sroy-link-v1:dGVzdA',
+          wrapped_vault_bundle: 'sroy-link:dGVzdA',
         }),
       },
     );

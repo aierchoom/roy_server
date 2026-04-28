@@ -55,7 +55,7 @@ function registerApprovePairingSessionRoute(app, { pairingStore, now }) {
       if (Buffer.byteLength(wrappedVaultBundle, 'utf8') > MAX_WRAPPED_BUNDLE_BYTES) {
         throw new RequestValidationError('wrapped_vault_bundle is too large.');
       }
-      if (!wrappedVaultBundle.trim().startsWith('sroy-pairing-v2:')) {
+      if (!wrappedVaultBundle.trim().startsWith('sroy-pairing:')) {
         throw new RequestValidationError(
           'wrapped_vault_bundle must be an encrypted pairing bundle.',
         );

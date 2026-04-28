@@ -35,9 +35,13 @@ function registerGetPairingBundleRoute(app, { pairingStore, now }) {
         throw new PairingSessionError(409, 'Pairing bundle is not ready.');
       }
 
+      const wrappedVaultBundle = session.wrappedVaultBundle;
+      pairingStore.sessionsById.delete(session.id);
+      pairingStore.sessionsByCode.delete(session.pairingCode);
+
       return res.json({
         status: 'approved',
-        wrapped_vault_bundle: session.wrappedVaultBundle,
+        wrapped_vault_bundle: wrappedVaultBundle,
       });
     } catch (error) {
       return sendRouteError(res, error);

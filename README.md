@@ -96,9 +96,10 @@ Near-term usability goals:
     requester public key.
 - `POST /pairing/sessions/:sessionId/approve`
   - Lets the host approve or reject the pending requester. Approved bundles
-    must use the encrypted `sroy-pairing-v2:` format.
+    must use the encrypted `sroy-pairing:` format.
 - `GET /pairing/sessions/:sessionId/bundle`
-  - Lets the approved requester fetch the wrapped vault bundle.
+  - Lets the approved requester fetch the wrapped vault bundle once. The server
+    deletes the pairing session and encrypted bundle after a successful fetch.
 
 ## Limits
 
@@ -124,7 +125,9 @@ Near-term usability goals:
 - Pairing codes use the readable alphabet
   `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` and reject ambiguous characters.
 - Server-mediated pairing requires the requester to publish a temporary public
-  key, and approval rejects plaintext `sroy-link-v1:` transfer bundles.
+  key, and approval rejects plaintext `sroy-link:` transfer bundles.
+- Approved pairing bundles are one-time fetch artifacts and are removed after
+  the requester claims them.
 - All mutation requests must use `Content-Type: application/json`.
 - API responses include conservative headers such as `Cache-Control: no-store`,
   `X-Content-Type-Options: nosniff`, and `X-Frame-Options: DENY`.
