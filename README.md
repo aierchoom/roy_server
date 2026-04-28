@@ -90,11 +90,13 @@ Near-term usability goals:
 - `POST /pairing/sessions`
   - Creates a short-lived pairing session for a trusted host device.
 - `POST /pairing/sessions/join`
-  - Lets a requester claim a pairing code.
+  - Lets a requester claim a pairing code with `requester_public_key`.
 - `GET /pairing/sessions/:sessionId`
-  - Lets the host poll pending requester details.
+  - Lets the host poll pending requester details, including the temporary
+    requester public key.
 - `POST /pairing/sessions/:sessionId/approve`
-  - Lets the host approve or reject the pending requester.
+  - Lets the host approve or reject the pending requester. Approved bundles
+    must use the encrypted `sroy-pairing-v2:` format.
 - `GET /pairing/sessions/:sessionId/bundle`
   - Lets the approved requester fetch the wrapped vault bundle.
 
@@ -121,6 +123,8 @@ Near-term usability goals:
   `503` persistence errors instead of partial reads.
 - Pairing codes use the readable alphabet
   `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` and reject ambiguous characters.
+- Server-mediated pairing requires the requester to publish a temporary public
+  key, and approval rejects plaintext `sroy-link-v1:` transfer bundles.
 - All mutation requests must use `Content-Type: application/json`.
 - API responses include conservative headers such as `Cache-Control: no-store`,
   `X-Content-Type-Options: nosniff`, and `X-Frame-Options: DENY`.

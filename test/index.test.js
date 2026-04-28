@@ -568,6 +568,8 @@ test('pairing session lifecycle creates, joins, approves, and fetches bundle', a
     const baseUrl = `http://127.0.0.1:${address.port}`;
     const hostDeviceId = 'device_abcdef123456';
     const requesterDeviceId = 'device_123456abcdef';
+    const requesterPublicKey = 'q'.repeat(43);
+    const encryptedBundle = `sroy-pairing-v2:${'b'.repeat(64)}`;
 
     const createResponse = await fetch(`${baseUrl}/pairing/sessions`, {
       method: 'POST',
@@ -588,6 +590,7 @@ test('pairing session lifecycle creates, joins, approves, and fetches bundle', a
       body: JSON.stringify({
         pairing_code: createdSession.pairing_code,
         requester_device_id: requesterDeviceId,
+        requester_public_key: requesterPublicKey,
       }),
     });
     assert.equal(joinResponse.status, 200);
@@ -605,6 +608,10 @@ test('pairing session lifecycle creates, joins, approves, and fetches bundle', a
       hostStatus.pending_request.requester_device_id,
       requesterDeviceId,
     );
+    assert.equal(
+      hostStatus.pending_request.requester_public_key,
+      requesterPublicKey,
+    );
 
     const approveResponse = await fetch(
       `${baseUrl}/pairing/sessions/${createdSession.session_id}/approve`,
@@ -614,7 +621,7 @@ test('pairing session lifecycle creates, joins, approves, and fetches bundle', a
         body: JSON.stringify({
           host_device_id: hostDeviceId,
           request_id: joinBody.request_id,
-          wrapped_vault_bundle: 'sroy-link-v1:dGVzdA',
+          wrapped_vault_bundle: encryptedBundle,
         }),
       },
     );
@@ -628,7 +635,63 @@ test('pairing session lifecycle creates, joins, approves, and fetches bundle', a
     assert.equal(bundleResponse.status, 200);
     const bundleBody = await bundleResponse.json();
     assert.equal(bundleBody.status, 'approved');
-    assert.equal(bundleBody.wrapped_vault_bundle, 'sroy-link-v1:dGVzdA');
+    assert.equal(bundleBody.wrapped_vault_bundle, encryptedBundle);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('pairing approve rejects plaintext transfer codes', async () => {
+  const dataDir = createTempDir();
+  const app = createApp({
+    dataDir,
+    logger: { info() {}, warn() {}, log() {}, error() {} },
+  });
+  const server = app.listen(0);
+
+  try {
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const hostDeviceId = 'device_abcdef123456';
+    const requesterDeviceId = 'device_123456abcdef';
+
+    const createResponse = await fetch(`${baseUrl}/pairing/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        vault_id: 'vault_abc123',
+        host_device_id: hostDeviceId,
+      }),
+    });
+    const createdSession = await createResponse.json();
+
+    const joinResponse = await fetch(`${baseUrl}/pairing/sessions/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pairing_code: createdSession.pairing_code,
+        requester_device_id: requesterDeviceId,
+        requester_public_key: 'q'.repeat(43),
+      }),
+    });
+    const joinBody = await joinResponse.json();
+
+    const approveResponse = await fetch(
+      `${baseUrl}/pairing/sessions/${createdSession.session_id}/approve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          host_device_id: hostDeviceId,
+          request_id: joinBody.request_id,
+          wrapped_vault_bundle: 'sroy-link-v1:dGVzdA',
+        }),
+      },
+    );
+
+    assert.equal(approveResponse.status, 400);
+    assert.match((await approveResponse.json()).error, /encrypted pairing bundle/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(dataDir, { recursive: true, force: true });
@@ -653,11 +716,41 @@ test('pairing join rejects malformed code before lookup', async () => {
         body: JSON.stringify({
           pairing_code: 'ABCDEF10',
           requester_device_id: 'device_abcdef123456',
+          requester_public_key: 'q'.repeat(43),
         }),
       },
     );
     assert.equal(response.status, 400);
     assert.match((await response.json()).error, /Invalid pairing code/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('pairing join requires requester public key', async () => {
+  const dataDir = createTempDir();
+  const app = createApp({
+    dataDir,
+    logger: { info() {}, warn() {}, log() {}, error() {} },
+  });
+  const server = app.listen(0);
+
+  try {
+    const address = server.address();
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/pairing/sessions/join`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pairing_code: 'ABCDEFGH',
+          requester_device_id: 'device_abcdef123456',
+        }),
+      },
+    );
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /requester_public_key/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(dataDir, { recursive: true, force: true });
@@ -682,6 +775,7 @@ test('pairing join fails with unknown code', async () => {
         body: JSON.stringify({
           pairing_code: 'ABCDEFGH',
           requester_device_id: 'device_abcdef123456',
+          requester_public_key: 'q'.repeat(43),
         }),
       },
     );

@@ -31,6 +31,7 @@ function registerGetPairingSessionRoute(app, { pairingStore, now }) {
           ? {
               request_id: session.pendingRequest.id,
               requester_device_id: session.pendingRequest.requesterDeviceId,
+              requester_public_key: session.pendingRequest.requesterPublicKey,
               requested_at: toIsoTimestamp(session.pendingRequest.requestedAtMs),
             }
           : null,

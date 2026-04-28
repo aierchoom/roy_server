@@ -7,7 +7,10 @@ const {
   sweepExpiredPairingSessions,
   toIsoTimestamp,
 } = require('../../pairing');
-const { validateSafeId } = require('../../validation');
+const {
+  validateRequesterPublicKey,
+  validateSafeId,
+} = require('../../validation');
 
 function registerJoinPairingSessionRoute(app, { pairingStore, now }) {
   app.post('/pairing/sessions/join', (req, res) => {
@@ -16,6 +19,9 @@ function registerJoinPairingSessionRoute(app, { pairingStore, now }) {
 
       const requesterDeviceId = req.body?.requester_device_id;
       validateSafeId(requesterDeviceId, 'requester device id');
+      const requesterPublicKey = validateRequesterPublicKey(
+        req.body?.requester_public_key,
+      );
 
       const pairingCode = normalizePairingCode(req.body?.pairing_code);
       const sessionId = pairingStore.sessionsByCode.get(pairingCode);
@@ -50,10 +56,14 @@ function registerJoinPairingSessionRoute(app, { pairingStore, now }) {
         session.pendingRequest = {
           id: `pr_${randomHex(16)}`,
           requesterDeviceId,
+          requesterPublicKey,
           requestedAtMs: now().getTime(),
         };
         session.status = 'pending_approval';
         session.wrappedVaultBundle = null;
+      } else if (session.status !== 'approved') {
+        session.pendingRequest.requesterPublicKey = requesterPublicKey;
+        session.pendingRequest.requestedAtMs = now().getTime();
       }
 
       return res.json({
