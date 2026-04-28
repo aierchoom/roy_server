@@ -1,52 +1,53 @@
-# Sync Server Usability Direction
+# 同步服务器易用性方向
 
-| Item | Value |
+| 项目 | 内容 |
 |---|---|
-| Status | Documented |
-| Date | 2026-04-28 |
-| Scope | Documentation, product direction |
-| Related Docs | [README](../../README.md) |
+| 状态 | 已记录 |
+| 日期 | 2026-04-28 |
+| 范围 | 文档、产品方向 |
+| 相关文档 | [README](../../README.md) |
 
-## Goal
+## 目标
 
-Document the current direction for improving the SecretRoy sync server as an easy personal/self-hosted appliance rather than a complex production platform.
+记录 SecretRoy 同步服务器的当前改进方向：它应更像一个容易使用的个人/自托管设备，
+而不是复杂的生产平台。
 
-## Scope
+## 范围
 
-Included:
+包含：
 
-- First-run setup direction.
-- Diagnostics direction.
-- Backup and migration direction.
-- Weak-server/self-hosting usability direction.
+- 首次运行设置方向。
+- 诊断能力方向。
+- 备份和迁移方向。
+- 弱服务器/自托管易用性方向。
 
-Out of scope:
+不包含：
 
-- Cluster deployment.
-- Managed hosting.
-- External database migration.
-- Team or enterprise governance.
+- 集群部署。
+- 托管服务。
+- 外部数据库迁移。
+- 团队或企业治理。
 
-## Changes
+## 变更
 
-- Added a `Usability Direction` section to the server README.
-- Added the current conclusion that the server is an optional sync helper for a local-first vault.
-- Clarified that server usability should prioritize simple startup, inspectability, safe backup, and machine replacement.
-- Clarified that diagnostics must remain secret-safe and never print vault payloads, pairing bundles, or client secrets.
+- 在服务器 README 中新增 `Usability Direction` 章节。
+- 增加当前结论：服务器是 local-first vault 的可选同步辅助组件。
+- 明确服务器易用性应优先关注简单启动、可检查性、安全备份和机器替换。
+- 明确诊断能力必须对秘密安全，绝不能打印 vault payload、配对 bundle 或客户端秘密。
 
-## Validation
+## 验证
 
-- Documentation-only change.
-- Reviewed the README section for alignment with the current lightweight server architecture.
+- 仅文档变更。
+- 已审阅 README 章节，确认其与当前轻量服务器架构一致。
 
-## Risk Notes
+## 风险说明
 
-- This does not implement new server behavior yet.
-- Future implementation should keep the server lightweight and avoid adding operational complexity before the first-run path is clear.
+- 这次尚未实现新的服务器行为。
+- 后续实现应保持服务器轻量，在首次运行路径清晰之前避免增加运维复杂度。
 
-## Follow-Ups
+## 后续工作
 
-- Add `.env.example` and copyable startup examples.
-- Add safe diagnostics endpoint or command output.
-- Add backup and migration guide for `DATA_DIR`.
-- Add client-side server URL validation and health-check UX.
+- 增加 `.env.example` 和可复制的启动示例。
+- 增加安全的诊断端点或命令输出。
+- 增加 `DATA_DIR` 备份和迁移指南。
+- 增加客户端侧服务器 URL 校验和 health-check 体验。
